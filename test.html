@@ -1,0 +1,27 @@
+<script type="text/javascript" src="omega.js"></script>
+<script type="text/javascript">
+let ome = new Omega().parse`
+  2 f = _f^2
+  |   double a function
+    _f^2 _a = _ffa
+    _ffa = f _fa
+    _fa = f _a
+  res = _g2 x  |  compute 2 ++ 123
+    _g2 = 2 g
+  x = ${123}
+  g = ${a => ++a}
+`;
+
+// let ome = new Omega().parse`
+//   res = _y! _res  |  compute  3 * 3 * !( ++3 )
+//     _xx = times x
+//     _y = pp x
+//     _res = _xx _y
+//     _y! = ! _y
+//   x = ${3}
+//   times = ${a => b => a*b}
+//   pp = ${a => ++a}
+// `;
+
+ome.eval(ome.symbols.get("res"), [], []);
+</script>
