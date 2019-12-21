@@ -1,27 +1,23 @@
+<script type="text/javascript" src="./node_modules/nearley/lib/nearley.js"></script>
+<script type="text/javascript" src="grammar.js"></script>
 <script type="text/javascript" src="omega.js"></script>
 <script type="text/javascript">
-let ome = new Omega().parse`
-  2 f = _f^2
-  |   double a function
-    _f^2 _a = _ffa
-    _ffa = f _fa
-    _fa = f _a
-  res = _g2 x  |  compute 2 ++ 123
-    _g2 = 2 g
-  x = ${123}
-  g = ${a => ++a}
-`;
-
-// let ome = new Omega().parse`
-//   res = _y! _res  |  compute  3 * 3 * !( ++3 )
-//     _xx = times x
-//     _y = pp x
-//     _res = _xx _y
-//     _y! = ! _y
-//   x = ${3}
-//   times = ${a => b => a*b}
-//   pp = ${a => ++a}
+// let ome = parse`
+//   2 _f = _a : _f (_f _a)         |   double a function
+//   res = 2 ${a => ++a} ${123}     |   compute 2 ++ 123
+//   oo _f = _f*
+//   _f* _a = _f* (_f _a)
 // `;
 
-ome.eval(ome.symbols.get("res"), [], []);
+let ome = parse`
+  res = (! _y) (times ${2} _y)    |  compute  2 * !( ++3 )
+    _y = pp ${3}
+  ! = $reduce
+  times = ${a => b => a*b}
+  pp = ${a => ++a}
+`;
+
+// let logger = new RawLogger(ome);
+let logger = new ExprLogger(ome);
+reduce(ome.get("res"), logger.log.bind(logger));
 </script>

@@ -1,0 +1,22 @@
+{
+  "name": "omega",
+  "version": "1.0.0",
+  "description": "Be lazy in js!",
+  "main": "omega.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/worldmaker18349276/omega.js.git"
+  },
+  "author": "",
+  "license": "GPL-3.0-or-later",
+  "bugs": {
+    "url": "https://github.com/worldmaker18349276/omega.js/issues"
+  },
+  "homepage": "https://github.com/worldmaker18349276/omega.js#readme",
+  "dependencies": {
+    "nearley": "^2.19.0"
+  }
+}
