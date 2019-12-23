@@ -27,13 +27,13 @@ function parse(template, ...values) {
   const parser = new nearley.Parser(nearley.Grammar.fromCompiled(grammar));
   parser.feed(code);
 
-  function* binded(vari) {
+  function* bound(vari) {
     if ( vari[0] === APP ) {
-      yield* binded(vari[1]);
-      yield* binded(vari[2]);
+      yield* bound(vari[1]);
+      yield* bound(vari[2]);
     } else if ( vari[0] === ABS ) {
       yield vari[1];
-      yield* binded(vari[2]);
+      yield* bound(vari[2]);
     }
   }
 
@@ -72,7 +72,7 @@ function parse(template, ...values) {
     for ( let [sym, vari] of paragraph ) {
       context.set(sym, vari);
     }
-    for ( let [,vari] of paragraph ) for ( let sym of binded(vari) ) if ( sym !== "_" ) {
+    for ( let [,vari] of paragraph ) for ( let sym of bound(vari) ) if ( sym !== "_" ) {
       if ( !context.has(sym) ) {
         context.set(sym, []);
       } else if ( context.get(sym)[0] !== undefined ) {
@@ -99,33 +99,6 @@ function reduce(vari, logger) {
     vari.splice(0, vari.length, ...data);
   }
 
-  function subs(target, from, to) {
-    if ( target === from ) {
-      return to;
-
-    } else if ( target[0] === undefined ) {
-      return;
-
-    } else if ( target[0] === APP ) {
-      let func_ = subs(target[1], from, to);
-      let arg_ = subs(target[2], from, to);
-      if ( func_ === undefined && arg_ === undefined ) {
-        return;
-      }
-      return [APP, func_ || target[1], arg_ || target[2]];
-
-    } else if ( target[0] === ABS ) {
-      if ( target[1] === from ) {
-        return;
-      }
-      let res_ = subs(target[2], from, to);
-      if ( res_ === undefined ) {
-        return;
-      }
-      return [ABS, target[1], res_];
-    }
-  }
-
   while ( stack.length !== 0 ) {
     vari = stack[stack.length-1];
 
@@ -148,10 +121,36 @@ function reduce(vari, logger) {
       stack.push(func);
       continue;
 
-    } else if ( func[0] === ABS ) {
-      // beta-reduction for lambda function:   ((a : b) c)  =>  (b[c/a])
-      let res = subs(func[2], func[1], arg) || func[2];
-      assign(vari, APP, [NAT, IDENTITY], res);
+    } else if ( func[0] === ABS && func[1] === func[2] ) {
+      // beta-reduction for lambda function:   ((a : a) c)  =>  (c)
+      assign(vari, APP, [NAT, IDENTITY], arg);
+      continue;
+
+    } else if ( func[0] === ABS && func[2][0] === ABS && func[1] === func[2][1] ) {
+      // beta-reduction for lambda function:   ((a : (a : b)) c)  =>  (a : b)
+      assign(vari, ...func[2]);
+      continue;
+
+    } else if ( func[0] === ABS && func[2][0] === ABS ) {
+      // beta-reduction for lambda function:   ((a : (b : d)) c)  =>  (b : ((a : d) c))
+      let arg1 = func[1];
+      let arg2 = func[2][1];
+      let res = func[2][2];
+      let func_ = [ABS, arg1, res];
+      let res_ = [APP, func_, arg];
+      assign(vari, ABS, arg2, res_);
+      continue;
+
+    } else if ( func[0] === ABS && func[2][0] === APP ) {
+      // beta-reduction for lambda function:   ((a : (b d)) c)  =>  (((a : b) c) ((a : d) c))
+      let arg0 = func[1];
+      let res1 = func[2][1];
+      let res2 = func[2][2];
+      let func1 = [ABS, arg0, res1];
+      let func2 = [ABS, arg0, res2];
+      let res1_ = [APP, func1, arg];
+      let res2_ = [APP, func2, arg];
+      assign(vari, APP, res1_, res2_);
       continue;
 
     } else if ( func[0] === NAT && func[1] === IDENTITY && stack.length > 1 ) {
