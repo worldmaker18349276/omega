@@ -1,0 +1,21 @@
+<script src="[-]-syntax.js"></script>
+
+
+<xi-proc var="f" let="Y">
+
+  <xi-proc var="r" let="x">
+    <xi-pipe slot="res">
+      <xi-pipe slot="arg">
+        <xi-sym slot="arg">r</xi-sym>
+        <xi-sym slot="func">r</xi-sym>
+      </xi-pipe>
+      <xi-sym slot="func">f</xi-sym>
+    </xi-pipe>
+  </xi-proc>
+
+  <xi-pipe slot="res">
+    <xi-sym slot="arg">x</xi-sym>
+    <xi-sym slot="func">x</xi-sym>
+  </xi-pipe>
+</xi-proc>
+
