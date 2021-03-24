@@ -3,6 +3,8 @@
 const NAT = 0;
 const APP = 1;
 const ABS = 2;
+const SUB = 3;
+const ID = 4;
 const IDENTITY = Symbol("$identity");
 const REDUCE   = Symbol("$reduce");
 const builtins = Object.freeze([IDENTITY, REDUCE]);
@@ -13,15 +15,12 @@ function parse(template, ...values) {
   literals.set("$identity", IDENTITY);
   literals.set("$reduce", REDUCE);
 
-  // deal with literals
+  // deal with js literals
   let code = template[0];
-  for ( let i=0, counter=0; i<values.length; i++ ) {
-    if ( !/(^|\s|\()$/.test(template[i]) || !/^(\)|\s|$)/.test(template[i+1]) ) {
-      throw new Error("invalid syntax");
-    }
-    let placeholder = `\$literal#${counter++}`;
+  for ( let i=0; i<values.length; i++ ) {
+    let placeholder = `\$literal#${i}`;
     literals.set(placeholder, values[i]);
-    code += placeholder + template[i+1];
+    code += " " + placeholder + " " + template[i+1];
   }
 
   const parser = new nearley.Parser(nearley.Grammar.fromCompiled(grammar));
@@ -37,56 +36,42 @@ function parse(template, ...values) {
     }
   }
 
-  function bind(vari) {
-    if ( vari[0] === NAT ) {
-      if ( !literals.has(vari[1]) ) {
-        throw new Error("unknown literal");
-      }
-      vari[1] = literals.get(vari[1]);
-
-    } else if ( vari[0] === APP ) {
-      if ( typeof vari[1] !== "string" ) {
-        bind(vari[1]);
-      } else {
-        vari[1] = context.get(vari[1]) || [];
-      }
-
-      if ( typeof vari[2] !== "string" ) {
-        bind(vari[2]);
-      } else {
-        vari[2] = context.get(vari[2]) || [];
-      }
-
-    } else if ( vari[0] === ABS ) {
-      vari[1] = context.get(vari[1]) || [];
-
-      if ( typeof vari[2] !== "string" ) {
-        bind(vari[2]);
-      } else {
-        vari[2] = context.get(vari[2]) || [];
-      }
-    }
-  }
-
   for ( let paragraph of parser.results[0] ) {
-    for ( let [sym, vari] of paragraph ) {
-      context.set(sym, vari);
-    }
-    for ( let [,vari] of paragraph ) for ( let sym of bound(vari) ) if ( sym !== "_" ) {
-      if ( !context.has(sym) ) {
+    for ( let [sym, vari] of paragraph )
+      if ( sym !== "_" )
+        context.set(sym, vari);
+    for ( let [, vari] of paragraph ) for ( let sym of bound(vari) )
+      if ( sym !== "_" && !context.has(sym) )
         context.set(sym, []);
-      } else if ( context.get(sym)[0] !== undefined ) {
-        throw new Error("rebind variable");
+
+    let variables = new Set(paragraph.map(([sym, vari]) => vari));
+    for ( let vari of variables ) {
+      if ( vari[0] === NAT ) {
+        if ( !literals.has(vari[1]) )
+          throw new Error("unknown literal");
+        vari[1] = literals.get(vari[1]);
+
+      } else if ( vari[0] === APP ) {
+        if ( typeof vari[1] === "string" )
+          vari[1] = context.get(vari[1]) || [];
+        if ( typeof vari[2] === "string" )
+          vari[2] = context.get(vari[2]) || [];
+
+        variables.add(vari[1]);
+        variables.add(vari[2]);
+
+      } else if ( vari[0] === ABS ) {
+        if ( typeof vari[1] === "string" )
+          vari[1] = context.get(vari[1]) || [];
+        if ( typeof vari[2] === "string" )
+          vari[2] = context.get(vari[2]) || [];
+
+        variables.add(vari[2]);
       }
     }
 
-    for ( let [,vari] of paragraph ) {
-      bind(vari);
-    }
-
-    for ( let name of context.keys() ) if ( name.startsWith("_") ) {
+    for ( let name of context.keys() ) if ( name.startsWith("_") )
       context.delete(name);
-    }
   }
 
   return context;
@@ -102,273 +87,286 @@ function reduce(vari, logger) {
   while ( stack.length !== 0 ) {
     vari = stack[stack.length-1];
 
-    if ( logger && vari[0] !== undefined ) {
-      logger(...stack);
+    logger(...stack);
+
+    switch ( vari[0] ) {
+      case undefined:
+      case NAT:
+      case ABS:
+      case ID:
+        stack.pop();
+        break;
+
+      case APP:
+        let [, func, arg] = vari;
+        switch ( func[0] ) {
+          case undefined:
+            throw new Error("undefined variable");
+            break;
+
+          case ID:
+            // shorten pointer:   ((a) b)  =>  (a b)
+            assign(vari, APP, func[1], arg);
+            break;
+
+          case ABS:
+            // beta-reduction:   ((a : b) c)  =>  ({a -> c} b)
+            assign(vari, SUB, [[func[1], arg]], func[2]);
+            break;
+
+          case APP:
+          case SUB:
+            // application of application:   ((a b) c)
+            // application of substitution:  (({x -> y} b) c)
+            stack.push(func);
+            break;
+
+          case NAT:
+            switch ( arg[0] ) {
+              case undefined:
+                throw new Error("undefined variable");
+                break;
+
+              case ABS:
+                throw new Error("invalid application");
+                break;
+
+              case ID:
+                // (++ (b))  =>  (++ b)
+                assign(vari, APP, func, arg[1]);
+                break;
+
+              case APP:
+              case SUB:
+                // application of application:   (++ (b c))
+                // application of substitution:  (++ ({x -> y} c))
+                stack.push(arg);
+                break;
+
+              case NAT:
+                // (++ 2)  =>  3
+                assign(vari, NAT, func[1](arg[1]));
+                break;
+            }
+            break;
+        }
+        break;
+
+      case SUB:
+        let [, subs, expr] = vari;
+        switch ( expr[0] ) {
+          case ID:
+            // ({a -> c} (b))  =>  ({a -> c} b)
+            assign(vari, SUB, subs, expr[1]);
+            break;
+
+          case undefined:
+          case NAT:
+            // ({a -> c} a)  =>  (c)
+            // ({a -> c} b)  =>  (b)
+            // ({a -> c} 123)  =>  (123)
+            for ( let [key, value] of subs )
+              if ( key === expr )
+                expr = value;
+            assign(vari, ID, expr);
+            break;
+
+          case APP:
+            // ({a -> c} (b d))  =>  (({a -> c} b) ({a -> c} d))
+            let expr1 = [SUB, subs, expr[1]];
+            let expr2 = [SUB, subs, expr[2]];
+            assign(vari, APP, expr1, expr2);
+            break;
+
+          case ABS:
+            // ({a -> c} (b : d))  =>  (b' : ({b -> b', a -> c} d))
+            let v = [];
+            assign(vari, ABS, v, [SUB, [[expr[1], v], ...subs], expr[2]]);
+            break;
+
+          case SUB:
+            // ({a -> c} ({b -> d} e))  =>  ({b -> d, a -> c} e)
+            assign(vari, SUB, [...expr[1], ...subs], expr[2])
+            break;
+        }
+        break;
     }
-
-    if ( vari[0] === undefined ) {
-      throw new Error("undefined variable");
-    } else if ( vari[0] === NAT || vari[0] === ABS ) {
-      stack.pop();
-      continue;
-    }
-
-    let func = vari[1];
-    let arg = vari[2];
-
-    if ( func[0] === APP ) {
-      // application of application:   ((a b) c)
-      stack.push(func);
-      continue;
-
-    } else if ( func[0] === ABS && func[1] === func[2] ) {
-      // beta-reduction for lambda function:   ((a : a) c)  =>  (c)
-      assign(vari, APP, [NAT, IDENTITY], arg);
-      continue;
-
-    } else if ( func[0] === ABS && func[2][0] === ABS && func[1] === func[2][1] ) {
-      // beta-reduction for lambda function:   ((a : (a : b)) c)  =>  (a : b)
-      assign(vari, ...func[2]);
-      continue;
-
-    } else if ( func[0] === ABS && func[2][0] === ABS ) {
-      // beta-reduction for lambda function:   ((a : (b : d)) c)  =>  (b : ((a : d) c))
-      let arg1 = func[1];
-      let arg2 = func[2][1];
-      let res = func[2][2];
-      let func_ = [ABS, arg1, res];
-      let res_ = [APP, func_, arg];
-      assign(vari, ABS, arg2, res_);
-      continue;
-
-    } else if ( func[0] === ABS && func[2][0] === APP ) {
-      // beta-reduction for lambda function:   ((a : (b d)) c)  =>  (((a : b) c) ((a : d) c))
-      let arg0 = func[1];
-      let res1 = func[2][1];
-      let res2 = func[2][2];
-      let func1 = [ABS, arg0, res1];
-      let func2 = [ABS, arg0, res2];
-      let res1_ = [APP, func1, arg];
-      let res2_ = [APP, func2, arg];
-      assign(vari, APP, res1_, res2_);
-      continue;
-
-    } else if ( func[0] === NAT && func[1] === IDENTITY && stack.length > 1 ) {
-      // shorten pointer:   ((a) b)  =>  (a b)
-      stack.pop();
-      vari = stack[stack.length-1];
-      assign(vari, APP, arg, vari[2]);
-      continue;
-    }
-
-    // strict evaluation
-
-    let whnf = true;
-    if ( arg[0] === APP ) {
-      whnf = reduce(arg, logger && ((...vs) => logger(...stack, ...vs)));
-    }
-    if ( !whnf ) {
-      return false;
-    }
-
-    // shorten pointer:   (++ (b))  =>  (++ b)
-    if ( arg[0] === APP && arg[1][0] === NAT && arg[1][1] === IDENTITY ) {
-      arg = arg[2];
-      assign(vari, APP, func, arg);
-      if ( logger ) logger(...stack);
-    }
-
-    if ( func[0] === NAT && func[1] === IDENTITY ) { // stack.length === 1
-      if ( arg[0] === NAT ) {
-        // (id 1)  =>  1
-        assign(vari, NAT, arg[1]);
-      } else if ( arg[0] === ABS ) {
-        // (id (a : c))  =>  (a : c)
-        assign(vari, ABS, arg[1], arg[2]);
-      }
-
-    } else if ( func[0] === NAT && func[1] === REDUCE ) {
-      assign(vari, NAT, IDENTITY);
-
-    } else {
-      assign(vari, NAT, func[1](arg[1]));
-    }
-
-    if ( logger ) logger(...stack);
-    stack.pop();
   }
-
   return true;
 }
 
-class RawLogger
-{
-  constructor(context) {
-    this.names = new WeakMap();
-    this.counter = 0;
-    for ( let [name, vari] of context.entries() ) {
-      this.names.set(vari, name);
-    }
 
-    this.prefix = "» ";
-    this.indent = "  ";
-  }
-
-  variables(vari, out=[]) {
-    if ( out.includes(vari) ) {
-      return out;
-    }
-    if ( vari[0] === NAT ) {
-      out.push(vari);
-    } else if ( vari[0] === APP ) {
-      out.push(vari);
-      this.variables(vari[1], out);
-      this.variables(vari[2], out);
-    } else if ( vari[0] === ABS ) {
-      out.push(vari);
-      if ( !out.includes(vari[1]) ) {
-        out.push(vari[1]);
+function rawLogger(context) {
+  let names = new WeakMap();
+  for ( let [name, vari] of context.entries() )
+    names.set(vari, name);
+  let counter = 0;
+  function variables(stack) {
+    let targets = new Set(stack);
+    for ( let vari of targets ) {
+      if ( vari[0] === APP || vari[0] === ABS || vari[0] === ID )
+        for ( let v of vari.slice(1) )
+          targets.add(v);
+      if ( vari[0] === SUB ) {
+        targets.add(vari[2]);
+        for ( let [k, v] of vari[1] ) {
+          targets.add(k);
+          targets.add(v);
+        }
       }
-      this.variables(vari[2], out);
     }
-    return out;
+    for ( let vari of targets )
+      if ( !names.has(vari) )
+        names.set(vari, `_${counter++}`);
+    return Array.from(targets).filter(v => v[0] !== undefined);
   }
-  sentence(vari) {
-    let vari_name = this.names.get(vari);
-    if ( vari[0] === undefined ) {
-      return "";
 
-    } else if ( vari[0] === NAT && builtins.includes(vari[1]) ) {
-      return `${vari_name} = ${vari[1].description}`;
+  function toString(vari) {
+    switch ( vari[0] ) {
+      case undefined:
+        return "";
 
-    } else if ( vari[0] === NAT ) {
-      return `${vari_name} = \$\{${vari[1]}\}`;
+      case NAT:
+        if ( builtins.includes(vari[1]) )
+          return `${names.get(vari)} = ${vari[1].description}`;
+        else
+          return `${names.get(vari)} = \$\{${vari[1]}\}`;
 
-    } else if ( vari[0] === APP ) {
-      let func_name = this.names.get(vari[1]);
-      let arg_name = this.names.get(vari[2]);
-      return `${vari_name} = ${func_name} ${arg_name}`;
+      case ID:
+        return `${names.get(vari)} = ${names.get(vari[1])}`;
 
-    } else if ( vari[0] === ABS ) {
-      let arg_name = this.names.get(vari[1]);
-      let res_name = this.names.get(vari[2]);
-      return `${vari_name} ${arg_name} = ${res_name}`;
+      case APP:
+        return `${names.get(vari)} = ${names.get(vari[1])} ${names.get(vari[2])}`;
+
+      case ABS:
+      return `${names.get(vari)} ${names.get(vari[1])} = ${names.get(vari[2])}`;
+
+      case SUB:
+        let subs = [];
+        for ( let [key, value] of vari[1] )
+          subs.push(`${names.get(key)} → ${names.get(value)}`);
+        return `${names.get(vari)} = {${subs.join(", ")}} ${names.get(vari[2])}`;
     }
   }
-  log(...stack) {
-    let targets = [];
-    for ( let vari of stack ) {
-      this.variables(vari, targets);
-    }
-    for ( let target of targets ) if ( !this.names.has(target) ) {
-      this.names.set(target, `_${this.counter++}`);
-    }
-    targets = targets.filter(v => v[0] !== undefined);
 
+  const PREFIX = "» ";
+  const INDENT = "  ";
+  return function(...stack) {
+    let targets = variables(stack);
     let vari0 = stack[stack.length-1];
     let colors = new Map(stack.map(v => [v, "color:blue"]));
-    let str = targets.map(v => `%c${v===vari0 ? this.prefix : this.indent}${this.sentence(v)}`).join("\n");
+    let str = targets.map(v => `%c${v===vari0 ? PREFIX : INDENT}${toString(v)}`).join("\n");
     let css = targets.map(v => colors.get(v) || "color:reset");
     console.log(str, ...css);
-  }
+    confirm();
+  };
 }
 
-class ExprLogger
-{
-  constructor(context) {
-    this.names = new WeakMap();
-    this.counter = 0;
-    for ( let [name, vari] of context.entries() ) {
-      this.names.set(vari, name);
-    }
-  }
+function exprLogger(context) {
+  let names = new WeakMap();
+  for ( let [name, vari] of context.entries() )
+    names.set(vari, name);
 
-  expr(vari, highlight, outers=[]) {
-    let expr, css = [];
-    if ( vari[0] === undefined && !this.names.has(vari) ) {
-      this.names.set(vari, `_${this.counter++}`);
-    }
+  let counter = 0;
+
+  function expr(vari, highlight, outers=[]) {
+    let str, css = [];
+    if ( vari[0] === undefined && !names.has(vari) )
+      names.set(vari, `_${counter++}`);
 
     if ( outers.includes(vari) ) {
-      expr = "...";
+      str = "...";
 
-    } else if ( this.names.has(vari) && outers.length > 0 ) {
-      expr = this.names.get(vari);
+    } else if ( names.has(vari) && outers.length > 0 ) {
+      str = names.get(vari);
 
     } else if ( vari[0] === NAT && builtins.includes(vari[1]) ) {
-      expr = `${vari[1].description}`;
+      str = `${vari[1].description}`;
 
     } else if ( vari[0] === NAT ) {
-      expr = `\$\{${vari[1]}\}`;
+      str = `\$\{${vari[1]}\}`;
 
-    } else if ( vari[0] === APP && vari[1][0] === NAT && vari[1][1] === IDENTITY && highlight !== vari[1] ) {
-      let [arg, css1] = this.expr(vari[2], highlight, [vari, ...outers]);
-      css.push(...css1);
-      expr = `(${arg})`;
+    } else if ( vari[0] === ID && highlight !== vari[1] ) {
+      let [str2, css2] = expr(vari[1], highlight, [vari, ...outers]);
+      css.push(...css2);
+      str = `(${str2})`;
 
     } else if ( vari[0] === APP ) {
-      let [func, css1] = this.expr(vari[1], highlight, [vari, ...outers]);
-      let [arg, css2] = this.expr(vari[2], highlight, [vari, ...outers]);
+      let [str1, css1] = expr(vari[1], highlight, [vari, ...outers]);
+      let [str2, css2] = expr(vari[2], highlight, [vari, ...outers]);
       css.push(...css1, ...css2);
-      expr = `(${func} ${arg})`;
+      str = `(${str1} ${str2})`;
 
     } else if ( vari[0] === ABS ) {
-      let [arg, css1] = this.expr(vari[1], highlight, [vari, ...outers]);
-      let [res, css2] = this.expr(vari[2], highlight, [vari, ...outers]);
+      let [str1, css1] = expr(vari[1], highlight, [vari, ...outers]);
+      let [str2, css2] = expr(vari[2], highlight, [vari, ...outers]);
       css.push(...css1, ...css2);
-      expr = `(${arg} : ${res})`;
+      str = `(${str1} : ${str2})`;
+
+    } else if ( vari[0] === SUB ) {
+      const expr_ = v => expr(v, highlight, [vari, ...outers])[0];
+      let subs = [];
+      for ( let [k, v] of vari[1] )
+        subs.push(`${expr_(k)} → ${expr_(v)}`);
+      let subs_str = subs.join(", ");
+      let [str1, css1] = expr(vari[2], highlight, [vari, ...outers]);
+      css.push(...css1);
+      str = `({${subs_str}} ${str1})`;
     }
 
     if ( highlight === vari ) {
-      expr = `%c${expr}%c`;
+      str = `%c${str}%c`;
       css.unshift("color:blue");
       css.push("color:reset");
     }
-    return [expr, css];
+    return [str, css];
   }
-  log(...stack) {
-    let [str, css] = this.expr(stack[0], stack[stack.length-1]);
+
+  return function(...stack) {
+    let [str, css] = expr(stack[0], stack[stack.length-1]);
     console.log(str, ...css);
-  }
+    confirm();
+  };
 }
 
 // https://omrelli.ug/nearley-playground/
-// program    ->  [\n]:* paragraph [\n]:*            {% a => [a[1]] %}
-//            |   program "\n\n" paragraph [\n]:*    {% a => [...a[0], a[2]] %}
-// paragraph  ->  sentence                           {% a => a[0] %}
-//            |   paragraph "\n" sentence            {% a => [...a[0], ...a[2]] %}
+// main    ->  program                               {% id %}
+//
+// symbol  ->  [^\s\(\)$:=|] [^\s\(\)]:*             {% ([a, b]) => a + b.join("") %}
+//         |   [:=|] [^\s\(\)]:+                     {% ([a, b]) => a + b.join("") %}
+// literal ->  "$" [^\s\(\)]:+                       {% ([a, b]) => a + b.join("") %}
+// _       ->  [^\S\n]:+                             {% a => null %}
+//
+// expression  ->  constant                          {% id %}
+//             |   abstraction                       {% id %}
+//             |   application                       {% id %}
+//             |   identity                          {% id %}
+// atom        ->  symbol                            {% id %}
+//             |   constant                          {% id %}
+//             |   "(" _:? expression _:? ")"        {% a => a[2] %}
+//
+// constant    ->  literal                           {% a => [0, a[0]] %}
+// identity    ->  symbol                            {% a => [1, 4, a[0]] %}
+//             |   "(" _:? expression _:? ")"        {% a => [1, 4, a[2]] %}
+// application ->  atom _ atom                       {% a => [1, a[0], a[2]] %}
+//             |   application _ atom                {% a => [1, a[0], a[2]] %}
+// abstraction ->  symbol _ ":" _ atom               {% a => [2, a[0], a[4]] %}
+//             |   symbol _ ":" _ abstraction        {% a => [2, a[0], a[4]] %}
+//             |   symbol _ ":" _ application        {% a => [2, a[0], a[4]] %}
+//
+// declaration     ->  symbol _ "=" _ expression     {% a => [a[0], a[4]] %}
+//                 |   symbol _ abstraction_eq       {% a => [a[0], a[2]] %}
+// abstraction_eq  ->  symbol _ "=" _ atom           {% a => [2, a[0], a[4]] %}
+//                 |   symbol _ "=" _ abstraction    {% a => [2, a[0], a[4]] %}
+//                 |   symbol _ "=" _ application    {% a => [2, a[0], a[4]] %}
+//                 |   symbol _ abstraction_eq       {% a => [2, a[0], a[2]] %}
+//
+// comment    ->  "| " [^\n]:*                       {% a => null %}
+//            |   "|"                                {% a => null %}
 // sentence   ->  _:? comment                        {% a => [] %}
 //            |   _:? declaration _:?                {% a => [a[1]] %}
 //            |   _:? declaration _ comment          {% a => [a[1]] %}
-// comment    ->  "| " [^\n]:* | "|"                 {% a => [] %}
-// 
-// declaration     ->  symbol _ "=" _ expression     {% a => [a[0], a[4]] %}
-//                 |   symbol _ abstraction_eq       {% a => [a[0], a[2]] %}
-// abstraction_eq  ->  scoped _ "=" _ atom           {% a => [2, a[0], a[4]] %}
-//                 |   scoped _ "=" _ abstraction    {% a => [2, a[0], a[4]] %}
-//                 |   scoped _ "=" _ application    {% a => [2, a[0], a[4]] %}
-//                 |   scoped _ abstraction_eq       {% a => [2, a[0], a[2]] %}
-// 
-// parentheses ->  "(" _:? expression _:? ")"  {% a => a[2] %}
-// expression  ->  constant       {% id %}
-//             |   abstraction    {% id %}
-//             |   application    {% id %}
-//             |   identity       {% id %}
-// atom        ->  symbol         {% id %}
-//             |   constant       {% id %}
-//             |   parentheses    {% id %}
-// 
-// constant    ->  literal                             {% a => [0, a[0]] %}
-// identity    ->  symbol                              {% a => [1, "id", a[0]] %}
-//             |   parentheses                         {% a => [1, "id", a[0]] %}
-// application ->  atom _ atom                         {% a => [1, a[0], a[2]] %}
-//             |   application _ atom                  {% a => [1, a[0], a[2]] %}
-// abstraction ->  scoped _ ":" _ atom                 {% a => [2, a[0], a[4]] %}
-//             |   scoped _ ":" _ abstraction          {% a => [2, a[0], a[4]] %}
-//             |   scoped _ ":" _ application          {% a => [2, a[0], a[4]] %}
-// 
-// symbol  ->  [^\s\(\)$:=|] [^\s\(\)]:*  {% ([a, b]) => a + b.join("") %}
-//         |   [:=|] [^\s\(\)]:+          {% ([a, b]) => a + b.join("") %}
-// scoped  ->  "_" [^\s\(\)]:*            {% ([a, b]) => a + b.join("") %}
-// literal ->  "$" [^\s\(\)]:+            {% ([a, b]) => a + b.join("") %}
-// _       ->  [^\S\n]:+                  {% a => null %}
+// paragraph  ->  sentence                           {% a => a[0] %}
+//            |   paragraph "\n" sentence            {% a => [...a[0], ...a[2]] %}
+// program    ->  [\n]:* paragraph [\n]:*            {% a => [a[1]] %}
+//            |   program "\n\n" paragraph [\n]:*    {% a => [...a[0], a[2]] %}

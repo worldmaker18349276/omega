@@ -2,22 +2,23 @@
 <script type="text/javascript" src="grammar.js"></script>
 <script type="text/javascript" src="omega.js"></script>
 <script type="text/javascript">
-// let ome = parse`
-//   2 _f = _a : _f (_f _a)         |   double a function
-//   res = 2 ${a => ++a} ${123}     |   compute 2 ++ 123
-//   oo _f = _f*
-//   _f* _a = _f* (_f _a)
-// `;
 
 let ome = parse`
-  res = (! _y) (times ${2} _y)    |  compute  2 * !( ++3 )
-    _y = pp ${3}
-  ! = $reduce
-  times = ${a => b => a*b}
-  pp = ${a => ++a}
+  2 _f = _a : _f (_f _a)         |   double a function
+  res = 2 ${a => ++a} ${123}     |   compute 2 ++ 123
+
+  oo _f = _f*
+  _f* _a = _f* (_f _a)
 `;
 
-// let logger = new RawLogger(ome);
-let logger = new ExprLogger(ome);
-reduce(ome.get("res"), logger.log.bind(logger));
+// let ome = parse`
+//   res = (! _y) (times ${2} _y)    |  compute  2 * !( ++3 )
+//     _y = pp ${3}
+//   ! = $reduce
+//   times = ${a => b => a*b}
+//   pp = ${a => ++a}
+// `;
+
+console.log(ome);
+reduce(ome.get("res"), exprLogger(ome));
 </script>
